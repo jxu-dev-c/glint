@@ -1,0 +1,78 @@
+# Push a vX.Y.Z tag: build an ad-hoc-signed Glint.app (Apple Silicon), publish a GitHub Release,
+# and update the cask in jxu-dev-c/homebrew-tap.
+#
+# Secrets:
+#   HOMEBREW_TAP_TOKEN  fine-grained PAT with contents:write on jxu-dev-c/homebrew-tap
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Existing tag to release, e.g. v0.1.0"
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: macos-26
+    env:
+      TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      - name: Version from tag
+        run: |
+          [[ "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "tag must look like v1.2.3, got $TAG" >&2; exit 1; }
+          echo "VERSION=${TAG#v}" >> "$GITHUB_ENV"
+
+      - name: Check for warnings
+        run: swift build -Xswiftc -warnings-as-errors
+
+      - name: Build app
+        run: |
+          scripts/build-app.sh
+          archs="$(lipo -archs build/Glint.app/Contents/MacOS/Glint)"
+          [[ "$archs" == arm64 ]] || { echo "expected an arm64 binary, got: $archs" >&2; exit 1; }
+
+      - name: Package
+        run: |
+          zip="build/Glint-$VERSION.zip"
+          ditto -c -k --keepParent build/Glint.app "$zip"
+          echo "ZIP=$zip" >> "$GITHUB_ENV"
+          echo "SHA256=$(shasum -a 256 "$zip" | cut -d' ' -f1)" >> "$GITHUB_ENV"
+
+      - name: GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "$ZIP" --clobber
+          else
+            gh release create "$TAG" "$ZIP" --title "Glint $VERSION" --generate-notes
+          fi
+
+      - name: Update Homebrew tap
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          git clone --depth 1 "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/jxu-dev-c/homebrew-tap.git" "$RUNNER_TEMP/tap"
+          mkdir -p "$RUNNER_TEMP/tap/Casks"
+          scripts/render-cask.sh "$VERSION" "$SHA256" > "$RUNNER_TEMP/tap/Casks/glint.rb"
+          cd "$RUNNER_TEMP/tap"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/glint.rb
+          if git diff --cached --quiet; then echo "cask unchanged"; exit 0; fi
+          git commit -m "glint $VERSION"
+          git push

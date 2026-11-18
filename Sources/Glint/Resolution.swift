@@ -27,12 +27,8 @@ enum Resolution {
         for mode in all where mode.isUsableForDesktopGUI() {
             let k = key(mode)
             if k == currentKey { best[k] = current; continue }
-            guard let existing = best[k] else { best[k] = mode; continue }
-            // Prefer the current refresh rate, then the highest one.
-            let target = current?.refreshRate ?? 0
-            let better = (mode.refreshRate == target && existing.refreshRate != target)
-                || (existing.refreshRate != target && mode.refreshRate > existing.refreshRate)
-            if better { best[k] = mode }
+            if let existing = best[k], existing.refreshRate >= mode.refreshRate { continue }
+            best[k] = mode
         }
 
         return best

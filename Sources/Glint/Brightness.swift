@@ -147,6 +147,7 @@ private final class DDCChannel: @unchecked Sendable {
 /// (for example over the HDMI port of an Apple Silicon Mac).
 @MainActor
 final class Brightness {
+    private let defaults: UserDefaults
     private var channels: [CGDirectDisplayID: DDCChannel] = [:]
     private var cached: [CGDirectDisplayID: Float] = [:]
     private var knownDisplays: Set<CGDirectDisplayID> = []
@@ -154,10 +155,17 @@ final class Brightness {
     /// Called when a DDC read finishes (or falls back to software) after the menu has been built.
     var onRead: ((CGDirectDisplayID, Float) -> Void)?
 
+    init(defaults: UserDefaults = .standard) {
+        self.defaults = defaults
+    }
+
     /// Re-pairs DDC channels when displays are connected or removed, and reads new ones.
     func update(displays: [CGDirectDisplayID]) {
         guard Set(displays) != knownDisplays else { return }
         knownDisplays = Set(displays)
+        for id in displays where !isNative(id) && cached[id] == nil {
+            cached[id] = loadSaved(id)
+        }
         channels = DDCChannel.discover(for: displays.filter { !isNative($0) })
         for id in displays where channels[id] == nil && !isNative(id) {
             if let v = cached[id], v < 1 { applyGamma(id, v) }
@@ -167,10 +175,16 @@ final class Brightness {
                 Task { @MainActor [weak self] in
                     guard let self, self.channels[id] === channel else { return }
                     if let value {
-                        self.cached[id] = value
+                        if let saved = self.cached[id] ?? self.loadSaved(id) {
+                            self.cached[id] = saved
+                            if abs(saved - value) > 0.01 { channel.write(saved) }
+                        } else {
+                            self.cached[id] = value
+                            self.save(id, value)
+                        }
                     } else {
                         self.channels[id] = nil  // no DDC reply: dim in software instead
-                        let v = self.cached[id] ?? 1
+                        let v = self.cached[id] ?? self.loadSaved(id) ?? 1
                         self.cached[id] = v
                         if v < 1 { self.applyGamma(id, v) }
                     }
@@ -186,7 +200,8 @@ final class Brightness {
             var v: Float = 0
             if get(id, &v) == 0 { return v }
         }
-        return cached[id] ?? (channels[id] != nil ? 0.5 : 1)
+        if let v = cached[id] ?? loadSaved(id) { return v }
+        return channels[id] != nil ? 0.5 : 1
     }
 
     func set(_ id: CGDirectDisplayID, _ value: Float) {
@@ -196,6 +211,7 @@ final class Brightness {
             return
         }
         cached[id] = v
+        save(id, v)
         if let channel = channels[id] {
             channel.write(v)
         } else {
@@ -210,6 +226,15 @@ final class Brightness {
 
     /// Undo software dimming (on quit).
     func restore() { CGDisplayRestoreColorSyncSettings() }
+
+    private func loadSaved(_ id: CGDirectDisplayID) -> Float? {
+        guard let number = defaults.object(forKey: Display.storageKey(for: id)) as? NSNumber else { return nil }
+        return min(max(number.floatValue, 0), 1)
+    }
+
+    private func save(_ id: CGDirectDisplayID, _ value: Float) {
+        defaults.set(value, forKey: Display.storageKey(for: id))
+    }
 
     private func applyGamma(_ id: CGDirectDisplayID, _ v: Float) {
         let level = 0.15 + 0.85 * v  // never fully black

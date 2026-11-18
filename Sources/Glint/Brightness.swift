@@ -47,7 +47,11 @@ private final class DDCChannel: @unchecked Sendable {
     func read(completion: @escaping @Sendable (Float?) -> Void) {
         queue.async {
             var reply = [UInt8](repeating: 0, count: 11)
-            guard self.transfer(send: [Self.brightnessVCP], reply: &reply) else { return completion(nil) }
+            guard self.transfer(send: [Self.brightnessVCP], reply: &reply),
+                  reply[0] == 0x6E,
+                  reply[2] == 0x02,
+                  reply[3] == 0x00,
+                  reply[4] == Self.brightnessVCP else { return completion(nil) }
             let max = UInt16(reply[6]) << 8 | UInt16(reply[7])
             let current = UInt16(reply[8]) << 8 | UInt16(reply[9])
             guard max > 0 else { return completion(nil) }
@@ -75,7 +79,7 @@ private final class DDCChannel: @unchecked Sendable {
     /// One DDC/CI exchange with retries. A 1-byte `send` is a "get VCP", a 3-byte one a "set VCP".
     private func transfer(send: [UInt8], reply: inout [UInt8]) -> Bool {
         var packet = [UInt8(0x80 | (send.count + 1)), UInt8(send.count)] + send + [0]
-        packet[packet.count - 1] = packet.dropLast().reduce(send.count == 1 ? 0x6E : 0x6E ^ 0x51, ^)
+        packet[packet.count - 1] = packet.dropLast().reduce(0x6E ^ 0x51, ^)
 
         for _ in 0..<4 {
             var ok = false
@@ -83,9 +87,9 @@ private final class DDCChannel: @unchecked Sendable {
                 usleep(10_000)
                 if IOAVServiceWriteI2C(service, 0x37, 0x51, &packet, UInt32(packet.count)) == kIOReturnSuccess { ok = true }
             }
-            if !reply.isEmpty {
+            if ok, !reply.isEmpty {
                 usleep(50_000)
-                ok = IOAVServiceReadI2C(service, 0x37, 0x51, &reply, UInt32(reply.count)) == kIOReturnSuccess
+                ok = IOAVServiceReadI2C(service, 0x37, 0, &reply, UInt32(reply.count)) == kIOReturnSuccess
                     && reply.dropLast().reduce(0x50, ^) == reply[reply.count - 1]
             }
             if ok { return true }

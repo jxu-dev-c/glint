@@ -87,6 +87,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let options = Resolution.options(for: id)
         guard !options.isEmpty else { return }
         let submenu = NSMenu()
+        let rates = Resolution.refreshRates(for: id)
+        if rates.count > 1 {
+            submenu.addItem(.sectionHeader(title: "Refresh Rate"))
+            for rate in rates {
+                let item = submenu.addItem(withTitle: rate.title, action: #selector(selectResolution(_:)), keyEquivalent: "")
+                item.target = self
+                item.tag = Int(id)
+                item.representedObject = rate.mode
+                item.state = rate.isCurrent ? .on : .off
+            }
+            submenu.addItem(.separator())
+            submenu.addItem(.sectionHeader(title: "Resolution"))
+        }
         for option in options {
             let item = submenu.addItem(withTitle: option.title, action: #selector(selectResolution(_:)), keyEquivalent: "")
             item.target = self
@@ -94,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             item.representedObject = option.mode
             item.state = option.isCurrent ? .on : .off
         }
-        let current = options.first(where: \.isCurrent)?.title ?? "—"
+        let current = options.first(where: \.isCurrent)?.summary ?? "—"
         let item = menu.addItem(withTitle: "Resolution: \(current)", action: nil, keyEquivalent: "")
         item.submenu = submenu
     }

@@ -159,7 +159,9 @@ final class Brightness {
         guard Set(displays) != knownDisplays else { return }
         knownDisplays = Set(displays)
         channels = DDCChannel.discover(for: displays.filter { !isNative($0) })
-        cached = cached.filter { knownDisplays.contains($0.key) }
+        for id in displays where channels[id] == nil && !isNative(id) {
+            if let v = cached[id], v < 1 { applyGamma(id, v) }
+        }
         for (id, channel) in channels {
             channel.read { value in
                 Task { @MainActor [weak self] in
@@ -168,7 +170,9 @@ final class Brightness {
                         self.cached[id] = value
                     } else {
                         self.channels[id] = nil  // no DDC reply: dim in software instead
-                        self.cached[id] = self.cached[id] ?? 1
+                        let v = self.cached[id] ?? 1
+                        self.cached[id] = v
+                        if v < 1 { self.applyGamma(id, v) }
                     }
                     self.onRead?(id, self.cached[id] ?? 1)
                 }
@@ -201,7 +205,7 @@ final class Brightness {
 
     /// macOS resets gamma tables on display changes and wake; put software dimming back.
     func reapplySoftwareDimming() {
-        for (id, v) in cached where channels[id] == nil && !isNative(id) { applyGamma(id, v) }
+        for (id, v) in cached where knownDisplays.contains(id) && channels[id] == nil && !isNative(id) { applyGamma(id, v) }
     }
 
     /// Undo software dimming (on quit).

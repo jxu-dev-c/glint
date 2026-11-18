@@ -29,6 +29,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main, using: reapply)
         NSWorkspace.shared.notificationCenter.addObserver(
             forName: NSWorkspace.didWakeNotification, object: nil, queue: .main, using: reapply)
+        NSEvent.addLocalMonitorForEvents(matching: .scrollWheel) { [weak self] event in
+            guard let self, let button = self.statusItem.button, event.window == button.window else { return event }
+            let delta = BrightnessSlider.delta(for: event)
+            guard delta != 0 else { return event }
+            let screenID = (event.window?.screen?.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value
+            let targetID = screenID ?? Display.all().first(where: { !$0.isBuiltin })?.id ?? Display.all().first?.id
+            guard let id = targetID else { return event }
+            let updated = min(max(self.brightness.value(id) + delta, 0), 1)
+            self.brightness.set(id, updated)
+            self.sliders[id]?.value = updated
+            return nil
+        }
     }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -151,6 +163,24 @@ final class BrightnessSlider: NSView {
     @objc private func changed() {
         updateLabel()
         onChange(slider.floatValue)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        let d = Self.delta(for: event)
+        guard d != 0 else { return }
+        let clamped = min(max(value + d, 0), 1)
+        guard clamped != value else { return }
+        value = clamped
+        onChange(clamped)
+    }
+
+    static func delta(for event: NSEvent) -> Float {
+        let raw = abs(event.scrollingDeltaY) >= abs(event.scrollingDeltaX)
+            ? event.scrollingDeltaY
+            : event.scrollingDeltaX
+        guard raw != 0 else { return 0 }
+        let scale: CGFloat = event.hasPreciseScrollingDeltas ? (1.0 / 200.0) : 0.02
+        return Float(raw * scale)
     }
 
     private func updateLabel() { label.stringValue = "\(Int((slider.floatValue * 100).rounded()))%" }
